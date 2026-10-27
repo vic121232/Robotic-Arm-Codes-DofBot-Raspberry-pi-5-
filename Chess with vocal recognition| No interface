@@ -1,0 +1,221 @@
+import chess
+import speech_recognition as sr
+
+class ChessGame:
+    def __init__(self):
+        self.board = chess.Board()
+        self.recognizer = sr.Recognizer()
+        self.recognizer.energy_threshold = 300
+        self.chess_mode = False
+
+    def print_board(self):
+        print("\n--- CHESS BOARD ---")
+        board_str = str(self.board)
+        rows = board_str.split("\n")
+        
+        print("  a b c d e f g h")
+        print("  ---------------")
+        for i, row in enumerate(rows):
+            rank_num = 8 - i
+            print(f"{rank_num}| {row}")
+            
+        print("  ---------------")
+        print("  a b c d e f g h\n")
+
+    def listen_command(self, prompt_text):
+        """Helper method to listen for a single voice input prompt with reduced noise filtering."""
+        print(prompt_text)
+        with sr.Microphone() as source:
+            try:
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.1)
+                audio = self.recognizer.listen(source, timeout=7, phrase_time_limit=4)
+                text = self.recognizer.recognize_google(audio).lower().strip()
+                print(f"Heard: '{text}'")
+                return text
+            except sr.WaitTimeoutError:
+                print("Listening timed out.")
+                return None
+            except sr.UnknownValueError:
+                print("Could not understand audio.")
+                return None
+            except sr.RequestError as e:
+                print(f"Could not reach speech service: {e}")
+                return None
+
+    def parse_file(self, text):
+        """Extracts a valid chess file letter (a-h) without scanning inside keyword substrings."""
+        if not text:
+            return None
+        text = text.lower().strip()
+        
+        if "cancel" in text:
+            return "cancel"
+
+        words = text.split()
+        
+        # 1. Look for word immediately following "letter" or "position"
+        for keyword in ['letter', 'position']:
+            if keyword in words:
+                idx = words.index(keyword)
+                if idx + 1 < len(words):
+                    next_word = words[idx + 1]
+                    if next_word in 'abcdefgh':
+                        return next_word
+
+        # 2. Fallback: check standalone words that match file letters
+        for word in words:
+            if word in 'abcdefgh':
+                return word
+                    
+        return None
+
+    def parse_rank(self, text):
+        """Extracts a valid chess rank number (1-8) without scanning inside keyword substrings."""
+        if not text:
+            return None
+        text = text.lower().strip()
+        
+        if "cancel" in text:
+            return "cancel"
+
+        words = text.split()
+        
+        word_map = {
+            'one': '1', 'won': '1',
+            'two': '2', 'to': '2', 'too': '2',
+            'three': '3',
+            'four': '4', 'for': '4', 'fore': '4',
+            'five': '5',
+            'six': '6',
+            'seven': '7',
+            'eight': '8'
+        }
+
+        # 1. Look for word immediately following "number" or "position"
+        for keyword in ['number', 'position']:
+            if keyword in words:
+                idx = words.index(keyword)
+                if idx + 1 < len(words):
+                    w = words[idx + 1]
+                    if w in '12345678':
+                        return w
+                    if w in word_map:
+                        return word_map[w]
+
+        # 2. Fallback: check standalone words
+        for word in words:
+            if word in '12345678':
+                return word
+            if word in word_map:
+                return word_map[word]
+
+        return None
+
+    def move(self, move_string):
+        cleaned_move = move_string.strip().lower().replace(" ", "")
+        try:
+            move = None
+            try:
+                move = chess.Move.from_uci(cleaned_move)
+            except ValueError:
+                pass
+            
+            if move not in self.board.legal_moves:
+                try:
+                    move = self.board.parse_san(cleaned_move)
+                except ValueError:
+                    pass
+
+            if move and move in self.board.legal_moves:
+                self.board.push(move)
+                print(f"Successfully moved: {cleaned_move}")
+                self.print_board()
+                return True
+            else:
+                print(f"Error: Invalid or illegal move '{move_string}'.")
+                return False
+        except Exception as e:
+            print(f"Error processing move: {e}")
+            return False
+
+    def run(self):
+        print("Chess Assistant is running.")
+        print("How to use:")
+        print("Say 'play chess' to start your turn.")
+        print("When prompted, use the following syntax:")
+        print("For letters, say 'letter a' through 'letter h'.")
+        print("For numbers, say 'position 1' through 'position 8' or words like 'two' or 'for'.")
+        print("Say 'quit chess' to exit.\n")
+
+        self.print_board()
+
+        while not self.board.is_game_over():
+            with sr.Microphone() as source:
+                try:
+                    self.recognizer.adjust_for_ambient_noise(source, duration=0.1)
+                    audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=4)
+                    spoken_text = self.recognizer.recognize_google(audio).lower()
+                    print(f"Heard: '{spoken_text}'")
+                    
+                    if "quit chess" in spoken_text or "exit chess" in spoken_text:
+                        print("Exiting chess program. Goodbye!")
+                        break
+
+                    # Wake word trigger
+                    if not self.chess_mode:
+                        if "play chess" in spoken_text or "chess move" in spoken_text or "play" in spoken_text:
+                            self.chess_mode = True
+                            print("\nChess Mode Activated")
+                            
+                            # Step 1: Source File
+                            raw_src_file = self.listen_command("Letter of position a:")
+                            src_file = self.parse_file(raw_src_file)
+                            if not src_file or src_file == "cancel":
+                                self.chess_mode = False
+                                print("Move cancelled. Returning to conversation mode.\n")
+                                continue
+
+                            # Step 2: Source Rank
+                            raw_src_rank = self.listen_command("Number of position a:")
+                            src_rank = self.parse_rank(raw_src_rank)
+                            if not src_rank or raw_src_rank == "cancel":
+                                self.chess_mode = False
+                                print("Move cancelled. Returning to conversation mode.\n")
+                                continue
+
+                            # Step 3: Target File
+                            raw_tgt_file = self.listen_command("Letter of position b:")
+                            tgt_file = self.parse_file(raw_tgt_file)
+                            if not tgt_file or tgt_file == "cancel":
+                                self.chess_mode = False
+                                print("Move cancelled. Returning to conversation mode.\n")
+                                continue
+
+                            # Step 4: Target Rank
+                            raw_tgt_rank = self.listen_command("Number of position b:")
+                            tgt_rank = self.parse_rank(raw_tgt_rank)
+                            if not tgt_rank or raw_tgt_rank == "cancel":
+                                self.chess_mode = False
+                                print("Move cancelled. Returning to conversation mode.\n")
+                                continue
+
+                            # Combine into a single 4-character UCI command
+                            combined_move = f"{src_file}{src_rank}{tgt_file}{tgt_rank}"
+                            print(f"Combining and executing move: '{combined_move}'")
+                            self.move(combined_move)
+                            
+                            self.chess_mode = False
+                            print("\nReturning to conversation mode. Say 'play chess' for your next turn.")
+                        else:
+                            pass
+
+                except sr.WaitTimeoutError:
+                    pass
+                except sr.UnknownValueError:
+                    pass
+                except sr.RequestError as e:
+                    print(f"Could not reach speech service: {e}")
+
+if __name__ == "__main__":
+    game = ChessGame()
+    game.run()
